@@ -1,0 +1,213 @@
+name: Tiflogram - to'liq APK yig'ish
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'scripts/fix_accessibility.py'
+      - 'scripts/fix_branding.py'
+      - 'scripts/fix_ads.py'
+      - 'scripts/fix_gemini.py'
+      - 'scripts/fix_download.py'
+      - 'assets/sound_in.wav'
+      - '.github/workflows/build-apk.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Sizning repo fayllaringizni olish (skriptlar)
+        uses: actions/checkout@v4
+        with:
+          path: my-files
+
+      - name: Telegram manba kodini yuklab olish
+        run: git clone --recursive https://github.com/DrKLO/Telegram.git telegram-src
+
+      - name: JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: NDK o'rnatish
+        run: sdkmanager --install "ndk;26.1.10909125"
+
+      - name: Build-tools o'rnatish (imzolash uchun)
+        run: sdkmanager --install "build-tools;34.0.0"
+
+      # ============================================================
+      # Bizning accessibility, branding va reklama skriptlarimizni qo'llash
+      # ============================================================
+      - name: Accessibility tuzatishlarini qo'llash
+        run: |
+          cd telegram-src
+          python3 ../my-files/scripts/fix_accessibility.py apply
+
+      - name: Ilova nomi va paket nomini qo'llash (Tiflogram)
+        run: |
+          cd telegram-src
+          python3 ../my-files/scripts/fix_branding.py apply
+
+      - name: Reklamalarni o'chirish (sponsored messages)
+        run: |
+          cd telegram-src
+          python3 ../my-files/scripts/fix_ads.py apply
+
+      - name: Gemini safety scanner faylini ko'chirish
+        run: |
+          mkdir -p telegram-src/TMessagesProj/src/main/java/org/telegram/messenger
+          if [ -f my-files/assets/java/org/telegram/messenger/GeminiSafetyScanner.java ]; then
+            cp my-files/assets/java/org/telegram/messenger/GeminiSafetyScanner.java \
+               telegram-src/TMessagesProj/src/main/java/org/telegram/messenger/GeminiSafetyScanner.java
+            echo "GeminiSafetyScanner.java ko'chirildi"
+          else
+            echo "OGOHLANTIRISH: GeminiSafetyScanner.java topilmadi"
+            exit 1
+          fi
+
+      - name: Gemini skaner patchlarini qo'llash
+        run: |
+          cd telegram-src
+          python3 ../my-files/scripts/fix_gemini.py apply
+
+      - name: Chat ichidagi xabar tovushini almashtirish
+        run: |
+          cd telegram-src
+          if [ -f ../my-files/assets/sound_in.wav ]; then
+            cp ../my-files/assets/sound_in.wav TMessagesProj/src/main/res/raw/sound_in.wav
+            echo "sound_in.wav almashtirildi (custom xabar tovushi)"
+            ls -la TMessagesProj/src/main/res/raw/sound_in.wav
+          else
+            echo "OGOHLANTIRISH: assets/sound_in.wav topilmadi — standart tovush qoladi"
+          fi
+          if [ -f ../my-files/assets/sound_download.wav ]; then
+            cp ../my-files/assets/sound_download.wav TMessagesProj/src/main/res/raw/sound_download.wav
+            echo "sound_download.wav qo'shildi (yuklash tugashi)"
+          else
+            echo "OGOHLANTIRISH: sound_download.wav topilmadi"
+          fi
+          python3 ../my-files/scripts/fix_download.py apply
+
+      - name: Google Services plaginini butunlay o'chirish
+        run: |
+          cd telegram-src
+          echo "=== Google Services plagini izlarini o'chirmoqdamiz ==="
+          find . -name "build.gradle" -exec grep -l "google-services" {} \; | while read -r f; do
+            echo "Tozalanmoqda: $f"
+            sed -i "/apply plugin:.*google-services/d" "$f"
+            sed -i "/id[[:space:]]*['\"]com\.google\.gms\.google-services['\"]/d" "$f"
+            sed -i "/classpath.*google-services/d" "$f"
+          done
+          find . -name "google-services.json" -delete
+          echo "Tayyor."
+
+      # ============================================================
+      # IMZOLASH - avtomatik, faqat BIRINCHI marta yaratiladi va
+      # repo'ning o'ziga saqlanadi. BU FAQAT PRIVATE REPO UCHUN
+      # XAVFSIZ.
+      # ============================================================
+      - name: Imzolash kaliti (keystore) tayyorlash
+        run: |
+          if [ ! -f my-files/release.keystore ]; then
+            echo "Kalit topilmadi - yangi kalit yaratilmoqda (faqat bir marta)..."
+            KEYSTORE_PW=$(openssl rand -base64 18)
+            keytool -genkeypair -v \
+              -keystore my-files/release.keystore \
+              -alias tiflogram \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "$KEYSTORE_PW" -keypass "$KEYSTORE_PW" \
+              -dname "CN=Tiflogram, OU=Personal, O=Personal, L=Tashkent, S=Tashkent, C=UZ"
+            echo "$KEYSTORE_PW" > my-files/release.keystore.password
+            cd my-files
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add release.keystore release.keystore.password
+            git commit -m "Avtomatik: imzolash kaliti yaratildi"
+            git push
+          else
+            echo "Kalit allaqachon mavjud - shu kalit ishlatiladi."
+          fi
+
+      - name: gradlew huquqi
+        run: chmod +x ./gradlew
+        working-directory: telegram-src
+
+      - name: Mavjud build variantlarini ko'rsatish (diagnostika)
+        run: |
+          echo "=== TMessagesProj_App uchun mavjud 'assemble' vazifalari ==="
+          ./gradlew :TMessagesProj_App:tasks --all 2>&1 | grep -i assemble || echo "(topilmadi - modul nomi boshqacha bo'lishi mumkin)"
+        working-directory: telegram-src
+        continue-on-error: true
+
+      - name: APK yig'ish
+        run: ./gradlew :TMessagesProj_App:assembleAfatRelease --stacktrace
+        working-directory: telegram-src
+
+      - name: APK'ni topish
+        id: find_apk
+        run: |
+          echo "TMessagesProj_App/build/outputs/apk ichidan qidiryapmiz:"
+          find TMessagesProj_App/build/outputs/apk -type f -name "*.apk" || true
+
+          APK_FILE=$(find TMessagesProj_App/build/outputs/apk -type f -iname "*universal*release*.apk" | head -n 1)
+          if [ -z "$APK_FILE" ]; then
+            APK_FILE=$(find TMessagesProj_App/build/outputs/apk -type f -iname "*release*.apk" | head -n 1)
+          fi
+          if [ -z "$APK_FILE" ]; then
+            APK_FILE=$(find TMessagesProj_App/build/outputs/apk -type f -name "*.apk" | head -n 1)
+          fi
+
+          if [ -z "$APK_FILE" ]; then
+            echo "XATO: .apk fayli topilmadi! Yuqoridagi build logini tekshiring."
+            exit 1
+          fi
+
+          echo "Topilgan APK: $APK_FILE"
+          echo "apk_path=telegram-src/$APK_FILE" >> $GITHUB_OUTPUT
+        working-directory: telegram-src
+
+      - name: APK'ni tekislash va imzolash
+        id: sign_apk
+        run: |
+          BUILD_TOOLS_DIR=$(find $ANDROID_HOME/build-tools -maxdepth 1 -type d -name "34*" | sort -V | tail -n 1)
+          ZIPALIGN="$BUILD_TOOLS_DIR/zipalign"
+          APKSIGNER="$BUILD_TOOLS_DIR/apksigner"
+
+          UNSIGNED_APK="${{ steps.find_apk.outputs.apk_path }}"
+          ALIGNED_APK="aligned-unsigned.apk"
+          SIGNED_APK="tiflogram-signed.apk"
+          KEYSTORE_PW=$(cat my-files/release.keystore.password)
+
+          "$ZIPALIGN" -v -p 4 "$UNSIGNED_APK" "$ALIGNED_APK"
+          "$APKSIGNER" sign \
+            --ks my-files/release.keystore \
+            --ks-key-alias tiflogram \
+            --ks-pass "pass:$KEYSTORE_PW" \
+            --key-pass "pass:$KEYSTORE_PW" \
+            --out "$SIGNED_APK" \
+            "$ALIGNED_APK"
+
+          echo "signed_apk_path=$SIGNED_APK" >> $GITHUB_OUTPUT
+
+      - name: Imzolangan APK'ni Artifacts'ga yuklash
+        uses: actions/upload-artifact@v4
+        with:
+          name: tiflogram-signed
+          path: ${{ steps.sign_apk.outputs.signed_apk_path }}
+
+      - name: Tayyor Release yaratish
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: "Tiflogram - build #${{ github.run_number }}"
+          files: ${{ steps.sign_apk.outputs.signed_apk_path }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

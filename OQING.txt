@@ -1,0 +1,13 @@
+TIFLOGRAM - YANGILANGAN
+=======================
+
+YANGI (yuklash):
+- Yuklash tugaganda maxsus tovush (sound_download)
+- TalkBack: "Yuklash tugadi"
+- Foiz e'loni (faqat xabar fokusida) saqlanadi
+- Fayllar Telegram o'rniga Tiflogram papkasiga:
+  Tiflogram / Tiflogram Images / Video / Audio / Documents / Files / Stories
+
+Boshqalar: reklamasiz, custom xabar tovushi, Gemini skaner, uzun matn->txt
+
+O'RNATISH: ZIP ni repo ga yuklang -> Actions -> Run workflow
